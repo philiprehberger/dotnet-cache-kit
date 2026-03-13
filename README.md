@@ -43,6 +43,17 @@ var keys = cache.Keys();
 
 // Clear everything
 cache.Clear();
+
+// Get or create (atomic)
+var user = cache.GetOrSet("user:1", () => LoadUserFromDb("1"), ttl: TimeSpan.FromMinutes(10));
+
+// Delete entries matching a predicate
+int removed = cache.DeleteWhere((key, value) => key.StartsWith("session:"));
+
+// Cache statistics
+var stats = cache.Stats;
+Console.WriteLine($"Hits: {stats.Hits}, Misses: {stats.Misses}");
+Console.WriteLine($"Evictions: {stats.Evictions}, Hit Rate: {stats.HitRate:P1}");
 ```
 
 ## API
@@ -57,6 +68,9 @@ cache.Clear();
 | `InvalidateByTag(tag)` | Remove all entries with a given tag |
 | `Keys()` | Get all non-expired keys |
 | `Clear()` | Remove all entries |
+| `GetOrSet(key, factory, ttl?)` | Get value or create it atomically using factory |
+| `DeleteWhere(predicate)` | Remove all entries matching predicate, returns count |
+| `Stats` | Get cache statistics (hits, misses, evictions, hit rate) |
 | `Size` | Current number of entries |
 
 ## License

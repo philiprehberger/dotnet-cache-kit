@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.0] - 2026-03-12
+
+### Added
+- Cache statistics via `Stats` property (hits, misses, evictions, hit rate)
+- `GetOrSet` method for atomic get-or-create pattern
+- `DeleteWhere` method for predicate-based cache entry removal
+
 ## 0.1.1 (2026-03-10)
 
 - Add README to NuGet package so it displays on nuget.org
