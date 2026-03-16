@@ -77,6 +77,12 @@ Console.WriteLine($"Evictions: {stats.Evictions}, Hit Rate: {stats.HitRate:P1}")
 | `Stats` | Get cache statistics (hits, misses, evictions, hit rate) |
 | `Size` | Current number of entries |
 
+## Development
+
+```bash
+dotnet build src/Philiprehberger.CacheKit.csproj --configuration Release
+```
+
 ## License
 
 MIT

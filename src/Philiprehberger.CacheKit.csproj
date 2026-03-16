@@ -5,11 +5,13 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <PackageId>Philiprehberger.CacheKit</PackageId>
-    <Version>0.2.2</Version>
+    <Version>0.2.3</Version>
     <Authors>Philip Rehberger</Authors>
     <Description>In-memory cache with TTL, LRU eviction, and tag invalidation for .NET</Description>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <RepositoryUrl>https://github.com/philiprehberger/dotnet-cache-kit</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <PackageTags>cache;lru;ttl;memory;caching</PackageTags>
     <PackageReadmeFile>README.md</PackageReadmeFile>
   </PropertyGroup>
