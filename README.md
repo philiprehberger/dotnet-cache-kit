@@ -1,5 +1,9 @@
 # Philiprehberger.CacheKit
 
+[![CI](https://github.com/philiprehberger/dotnet-cache-kit/actions/workflows/ci.yml/badge.svg)](https://github.com/philiprehberger/dotnet-cache-kit/actions/workflows/ci.yml)
+[![NuGet](https://img.shields.io/nuget/v/Philiprehberger.CacheKit.svg)](https://www.nuget.org/packages/Philiprehberger.CacheKit)
+[![License](https://img.shields.io/github/license/philiprehberger/dotnet-cache-kit)](LICENSE)
+
 Thread-safe in-memory LRU cache for .NET — TTL expiration, tag-based invalidation, and configurable max size.
 
 ## Install
