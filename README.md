@@ -60,6 +60,40 @@ Console.WriteLine($"Hits: {stats.Hits}, Misses: {stats.Misses}");
 Console.WriteLine($"Evictions: {stats.Evictions}, Hit Rate: {stats.HitRate:P1}");
 ```
 
+### Async Usage
+
+Use `GetOrSetAsync` to populate cache entries from async sources like databases or HTTP calls:
+
+```csharp
+var user = await cache.GetOrSetAsync(
+    "user:42",
+    async () => await httpClient.GetFromJsonAsync<string>("/api/users/42"),
+    ttl: TimeSpan.FromMinutes(5),
+    tags: new[] { "users" }
+);
+```
+
+### Batch Operations
+
+Retrieve multiple entries at once with `GetMany`. Missing or expired keys are omitted:
+
+```csharp
+var keys = new[] { "user:1", "user:2", "user:3" };
+var found = cache.GetMany(keys);
+// found is Dictionary<string, string> with only the keys that exist
+```
+
+### Eviction Callbacks
+
+Register a callback to be notified when entries are evicted:
+
+```csharp
+cache.OnEvict((key, value) =>
+{
+    Console.WriteLine($"Evicted: {key} = {value}");
+});
+```
+
 ## API
 
 | Method | Description |
@@ -73,6 +107,9 @@ Console.WriteLine($"Evictions: {stats.Evictions}, Hit Rate: {stats.HitRate:P1}")
 | `Keys()` | Get all non-expired keys |
 | `Clear()` | Remove all entries |
 | `GetOrSet(key, factory, ttl?)` | Get value or create it atomically using factory |
+| `GetOrSetAsync(key, factory, ttl?, tags?)` | Async version of GetOrSet with optional tags |
+| `GetMany(keys)` | Get multiple values; missing keys omitted from result |
+| `OnEvict(callback)` | Register callback for eviction notifications |
 | `DeleteWhere(predicate)` | Remove all entries matching predicate, returns count |
 | `Stats` | Get cache statistics (hits, misses, evictions, hit rate) |
 | `Size` | Current number of entries |

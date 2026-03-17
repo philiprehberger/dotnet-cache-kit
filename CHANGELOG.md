@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.0
+
+- Add `GetOrSetAsync` for async cache population
+- Add `TryGet` for non-throwing cache lookups
+- Add `GetMany` for batch key retrieval
+- Add `OnEvict` callback for eviction notifications
+
 ## 0.2.3
 
 - Add Development section to README
