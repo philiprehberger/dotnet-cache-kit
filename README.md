@@ -6,7 +6,7 @@
 
 Thread-safe in-memory LRU cache for .NET — TTL expiration, tag-based invalidation, and configurable max size.
 
-## Install
+## Installation
 
 ```bash
 dotnet add package Philiprehberger.CacheKit
