@@ -5,11 +5,30 @@ using System.Threading.Tasks;
 
 namespace Philiprehberger.CacheKit;
 
+/// <summary>
+/// Represents a snapshot of cache performance statistics.
+/// </summary>
 public record CacheStats
 {
+    /// <summary>
+    /// Gets the total number of cache hits.
+    /// </summary>
     public long Hits { get; init; }
+
+    /// <summary>
+    /// Gets the total number of cache misses.
+    /// </summary>
     public long Misses { get; init; }
+
+    /// <summary>
+    /// Gets the total number of entries evicted from the cache.
+    /// </summary>
     public long Evictions { get; init; }
+
+    /// <summary>
+    /// Gets the cache hit rate as a value between 0.0 and 1.0.
+    /// Returns 0.0 when no lookups have been performed.
+    /// </summary>
     public double HitRate => Hits + Misses == 0 ? 0.0 : (double)Hits / (Hits + Misses);
 }
 
@@ -20,6 +39,10 @@ internal class CacheEntry<V>
     public HashSet<string> Tags { get; set; } = new();
 }
 
+/// <summary>
+/// A thread-safe, in-memory LRU cache with support for TTL expiration, tag-based invalidation, and eviction callbacks.
+/// </summary>
+/// <typeparam name="V">The type of values stored in the cache.</typeparam>
 public class Cache<V>
 {
     private readonly Dictionary<string, CacheEntry<V>> _items;
@@ -33,6 +56,11 @@ public class Cache<V>
     private long _evictions;
     private Action<string, V>? _onEvict;
 
+    /// <summary>
+    /// Initializes a new instance of the <see cref="Cache{V}"/> class.
+    /// </summary>
+    /// <param name="maxSize">The maximum number of entries the cache can hold before eviction occurs.</param>
+    /// <param name="defaultTtl">An optional default time-to-live applied to entries that don't specify their own TTL.</param>
     public Cache(int maxSize = 1000, TimeSpan? defaultTtl = null)
     {
         _maxSize = maxSize;
@@ -40,11 +68,17 @@ public class Cache<V>
         _items = new Dictionary<string, CacheEntry<V>>(maxSize);
     }
 
+    /// <summary>
+    /// Gets the current number of entries in the cache.
+    /// </summary>
     public int Size
     {
         get { lock (_lock) return _items.Count; }
     }
 
+    /// <summary>
+    /// Gets a snapshot of the current cache performance statistics.
+    /// </summary>
     public CacheStats Stats
     {
         get
@@ -61,6 +95,13 @@ public class Cache<V>
         }
     }
 
+    /// <summary>
+    /// Adds or updates a cache entry with the specified key and value.
+    /// </summary>
+    /// <param name="key">The cache key.</param>
+    /// <param name="value">The value to store.</param>
+    /// <param name="ttl">An optional TTL override for this entry. Falls back to the default TTL if not specified.</param>
+    /// <param name="tags">Optional tags for group invalidation.</param>
     public void Set(string key, V value, TimeSpan? ttl = null, IEnumerable<string>? tags = null)
     {
         lock (_lock)
@@ -86,6 +127,11 @@ public class Cache<V>
         }
     }
 
+    /// <summary>
+    /// Gets the value associated with the specified key, or the default value if the key is not found or has expired.
+    /// </summary>
+    /// <param name="key">The cache key to look up.</param>
+    /// <returns>The cached value if found and not expired; otherwise, the default value for <typeparamref name="V"/>.</returns>
     public V? Get(string key)
     {
         lock (_lock)
@@ -143,6 +189,13 @@ public class Cache<V>
         }
     }
 
+    /// <summary>
+    /// Gets the value for the specified key, or creates and caches it using the factory function if not present or expired.
+    /// </summary>
+    /// <param name="key">The cache key to look up or populate.</param>
+    /// <param name="factory">A factory function invoked on cache miss to produce the value.</param>
+    /// <param name="ttl">An optional TTL override for this entry.</param>
+    /// <returns>The cached or newly created value.</returns>
     public V GetOrSet(string key, Func<V> factory, TimeSpan? ttl = null)
     {
         lock (_lock)
@@ -176,6 +229,11 @@ public class Cache<V>
         }
     }
 
+    /// <summary>
+    /// Determines whether the cache contains a non-expired entry with the specified key.
+    /// </summary>
+    /// <param name="key">The cache key to check.</param>
+    /// <returns>True if the key exists and has not expired; otherwise, false.</returns>
     public bool Has(string key)
     {
         lock (_lock)
@@ -190,11 +248,21 @@ public class Cache<V>
         }
     }
 
+    /// <summary>
+    /// Removes the entry with the specified key from the cache.
+    /// </summary>
+    /// <param name="key">The cache key to remove.</param>
+    /// <returns>True if the entry was found and removed; otherwise, false.</returns>
     public bool Delete(string key)
     {
         lock (_lock) return Remove(key);
     }
 
+    /// <summary>
+    /// Removes all cache entries that match the specified predicate.
+    /// </summary>
+    /// <param name="predicate">A function that receives the key and value and returns true for entries to remove.</param>
+    /// <returns>The number of entries removed.</returns>
     public int DeleteWhere(Func<string, V, bool> predicate)
     {
         lock (_lock)
@@ -211,6 +279,11 @@ public class Cache<V>
         }
     }
 
+    /// <summary>
+    /// Removes all cache entries associated with the specified tag.
+    /// </summary>
+    /// <param name="tag">The tag identifying entries to invalidate.</param>
+    /// <returns>The number of entries removed.</returns>
     public int InvalidateByTag(string tag)
     {
         lock (_lock)
@@ -227,6 +300,9 @@ public class Cache<V>
         }
     }
 
+    /// <summary>
+    /// Removes all entries from the cache.
+    /// </summary>
     public void Clear()
     {
         lock (_lock)
@@ -236,6 +312,10 @@ public class Cache<V>
         }
     }
 
+    /// <summary>
+    /// Returns a list of all non-expired cache keys.
+    /// </summary>
+    /// <returns>A list of keys for entries that have not expired.</returns>
     public List<string> Keys()
     {
         lock (_lock)

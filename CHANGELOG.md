@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.1
+
+- Add LangVersion and TreatWarningsAsErrors to csproj
+
 ## 0.3.0
 
 - Add `GetOrSetAsync` for async cache population

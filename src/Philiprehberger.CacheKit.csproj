@@ -4,8 +4,10 @@
     <TargetFramework>net8.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <PackageId>Philiprehberger.CacheKit</PackageId>
-    <Version>0.3.0</Version>
+    <Version>0.3.1</Version>
     <Authors>Philip Rehberger</Authors>
     <Description>In-memory cache with TTL, LRU eviction, and tag invalidation for .NET</Description>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
