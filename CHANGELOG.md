@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.2 (2026-03-21)
+
+- Align csproj description with README
+
 ## 0.3.1
 
 - Add LangVersion and TreatWarningsAsErrors to csproj
