@@ -1,31 +1,35 @@
 # Changelog
 
+## 0.3.3 (2026-03-22)
+
+- Add dates to changelog entries
+- Normalize changelog format
+
 ## 0.3.2 (2026-03-21)
 
 - Align csproj description with README
 
-## 0.3.1
+## 0.3.1 (2026-03-20)
 
 - Add LangVersion and TreatWarningsAsErrors to csproj
 
-## 0.3.0
+## 0.3.0 (2026-03-16)
 
 - Add `GetOrSetAsync` for async cache population
 - Add `TryGet` for non-throwing cache lookups
 - Add `GetMany` for batch key retrieval
 - Add `OnEvict` callback for eviction notifications
 
-## 0.2.3
+## 0.2.3 (2026-03-16)
 
 - Add Development section to README
 - Add GenerateDocumentationFile and RepositoryType to .csproj
 
-## [0.2.0] - 2026-03-12
+## 0.2.0 (2026-03-12)
 
-### Added
-- Cache statistics via `Stats` property (hits, misses, evictions, hit rate)
-- `GetOrSet` method for atomic get-or-create pattern
-- `DeleteWhere` method for predicate-based cache entry removal
+- Add cache statistics via `Stats` property (hits, misses, evictions, hit rate)
+- Add `GetOrSet` method for atomic get-or-create pattern
+- Add `DeleteWhere` method for predicate-based cache entry removal
 
 ## 0.1.1 (2026-03-10)
 
