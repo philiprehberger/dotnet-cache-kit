@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.4 (2026-03-26)
+
+- Add Sponsor badge to README
+- Fix License section format
+
 ## 0.3.3 (2026-03-22)
 
 - Add dates to changelog entries
