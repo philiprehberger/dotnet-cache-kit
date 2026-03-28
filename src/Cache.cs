@@ -1,6 +1,8 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace Philiprehberger.CacheKit;
@@ -26,10 +28,74 @@ public record CacheStats
     public long Evictions { get; init; }
 
     /// <summary>
+    /// Gets the current total estimated size of all cache entries in bytes.
+    /// </summary>
+    public long CurrentEstimatedSize { get; init; }
+
+    /// <summary>
     /// Gets the cache hit rate as a value between 0.0 and 1.0.
     /// Returns 0.0 when no lookups have been performed.
     /// </summary>
     public double HitRate => Hits + Misses == 0 ? 0.0 : (double)Hits / (Hits + Misses);
+}
+
+/// <summary>
+/// Represents a snapshot of per-tag statistics.
+/// </summary>
+public record TagStats
+{
+    /// <summary>
+    /// Gets the number of cache hits for entries with this tag.
+    /// </summary>
+    public long Hits { get; init; }
+
+    /// <summary>
+    /// Gets the number of cache misses for lookups that resulted in entries with this tag.
+    /// </summary>
+    public long Misses { get; init; }
+
+    /// <summary>
+    /// Gets the number of evictions for entries with this tag.
+    /// </summary>
+    public long Evictions { get; init; }
+}
+
+internal class MutableTagStats
+{
+    public long Hits;
+    public long Misses;
+    public long Evictions;
+}
+
+/// <summary>
+/// Configuration options for the cache.
+/// </summary>
+public class CacheOptions
+{
+    /// <summary>
+    /// Gets or sets the maximum number of entries the cache can hold before eviction occurs.
+    /// Defaults to 1000.
+    /// </summary>
+    public int MaxSize { get; set; } = 1000;
+
+    /// <summary>
+    /// Gets or sets an optional default time-to-live applied to entries that don't specify their own TTL.
+    /// </summary>
+    public TimeSpan? DefaultTtl { get; set; }
+
+    /// <summary>
+    /// Gets or sets an optional interval for background cleanup of expired entries.
+    /// When null (default), no background cleanup is performed and expired entries are only
+    /// removed on access.
+    /// </summary>
+    public TimeSpan? BackgroundCleanupInterval { get; set; }
+
+    /// <summary>
+    /// Gets or sets an optional maximum memory budget in bytes. When the total estimated size
+    /// of all cache entries exceeds this value, LRU entries are evicted until the budget is met.
+    /// Requires callers to provide size hints via the <c>estimatedSize</c> parameter on <c>Set</c>.
+    /// </summary>
+    public long? MaxMemoryBytes { get; set; }
 }
 
 internal class CacheEntry<V>
@@ -37,24 +103,31 @@ internal class CacheEntry<V>
     public V Value { get; set; } = default!;
     public DateTime? ExpiresAt { get; set; }
     public HashSet<string> Tags { get; set; } = new();
+    public long EstimatedSize { get; set; }
 }
 
 /// <summary>
-/// A thread-safe, in-memory LRU cache with support for TTL expiration, tag-based invalidation, and eviction callbacks.
+/// A thread-safe, in-memory LRU cache with support for TTL expiration, tag-based invalidation,
+/// size-based eviction, background cleanup, per-tag statistics, and eviction callbacks.
 /// </summary>
 /// <typeparam name="V">The type of values stored in the cache.</typeparam>
-public class Cache<V>
+public class Cache<V> : IDisposable
 {
     private readonly Dictionary<string, CacheEntry<V>> _items;
     private readonly LinkedList<string> _order = new();
     private readonly int _maxSize;
     private readonly TimeSpan? _defaultTtl;
+    private readonly long? _maxMemoryBytes;
     private readonly object _lock = new();
+    private readonly ConcurrentDictionary<string, MutableTagStats> _tagStats = new();
+    private readonly Timer? _cleanupTimer;
 
     private long _hits;
     private long _misses;
     private long _evictions;
+    private long _currentEstimatedSize;
     private Action<string, V>? _onEvict;
+    private bool _disposed;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="Cache{V}"/> class.
@@ -65,7 +138,30 @@ public class Cache<V>
     {
         _maxSize = maxSize;
         _defaultTtl = defaultTtl;
+        _maxMemoryBytes = null;
         _items = new Dictionary<string, CacheEntry<V>>(maxSize);
+    }
+
+    /// <summary>
+    /// Initializes a new instance of the <see cref="Cache{V}"/> class with advanced options.
+    /// </summary>
+    /// <param name="options">The cache configuration options.</param>
+    public Cache(CacheOptions options)
+    {
+        _maxSize = options.MaxSize;
+        _defaultTtl = options.DefaultTtl;
+        _maxMemoryBytes = options.MaxMemoryBytes;
+        _items = new Dictionary<string, CacheEntry<V>>(options.MaxSize);
+
+        if (options.BackgroundCleanupInterval.HasValue)
+        {
+            var interval = options.BackgroundCleanupInterval.Value;
+            _cleanupTimer = new Timer(
+                _ => CleanupExpired(),
+                null,
+                interval,
+                interval);
+        }
     }
 
     /// <summary>
@@ -89,7 +185,8 @@ public class Cache<V>
                 {
                     Hits = _hits,
                     Misses = _misses,
-                    Evictions = _evictions
+                    Evictions = _evictions,
+                    CurrentEstimatedSize = _currentEstimatedSize
                 };
             }
         }
@@ -102,7 +199,8 @@ public class Cache<V>
     /// <param name="value">The value to store.</param>
     /// <param name="ttl">An optional TTL override for this entry. Falls back to the default TTL if not specified.</param>
     /// <param name="tags">Optional tags for group invalidation.</param>
-    public void Set(string key, V value, TimeSpan? ttl = null, IEnumerable<string>? tags = null)
+    /// <param name="estimatedSize">Optional estimated size in bytes for memory budget tracking.</param>
+    public void Set(string key, V value, TimeSpan? ttl = null, IEnumerable<string>? tags = null, long estimatedSize = 0)
     {
         lock (_lock)
         {
@@ -110,9 +208,11 @@ public class Cache<V>
             var expiresAt = effectiveTtl.HasValue ? DateTime.UtcNow + effectiveTtl.Value : (DateTime?)null;
             var tagSet = tags != null ? new HashSet<string>(tags) : new HashSet<string>();
 
-            if (_items.ContainsKey(key))
+            if (_items.TryGetValue(key, out var existing))
             {
-                _items[key] = new CacheEntry<V> { Value = value, ExpiresAt = expiresAt, Tags = tagSet };
+                _currentEstimatedSize -= existing.EstimatedSize;
+                _items[key] = new CacheEntry<V> { Value = value, ExpiresAt = expiresAt, Tags = tagSet, EstimatedSize = estimatedSize };
+                _currentEstimatedSize += estimatedSize;
                 _order.Remove(key);
                 _order.AddFirst(key);
             }
@@ -121,9 +221,12 @@ public class Cache<V>
                 if (_items.Count >= _maxSize)
                     Evict();
 
-                _items[key] = new CacheEntry<V> { Value = value, ExpiresAt = expiresAt, Tags = tagSet };
+                _items[key] = new CacheEntry<V> { Value = value, ExpiresAt = expiresAt, Tags = tagSet, EstimatedSize = estimatedSize };
+                _currentEstimatedSize += estimatedSize;
                 _order.AddFirst(key);
             }
+
+            EvictForMemoryBudget();
         }
     }
 
@@ -139,12 +242,14 @@ public class Cache<V>
             if (!_items.TryGetValue(key, out var entry))
             {
                 _misses++;
+                IncrementTagMisses(key);
                 return default;
             }
 
             if (entry.ExpiresAt.HasValue && DateTime.UtcNow > entry.ExpiresAt.Value)
             {
-                RemoveWithEvict(key, entry.Value);
+                IncrementTagMisses(entry.Tags);
+                RemoveWithEvict(key, entry);
                 _misses++;
                 return default;
             }
@@ -152,12 +257,14 @@ public class Cache<V>
             _order.Remove(key);
             _order.AddFirst(key);
             _hits++;
+            IncrementTagHits(entry.Tags);
             return entry.Value;
         }
     }
 
     /// <summary>
     /// Tries to get a value. Returns true if found and not expired, false otherwise.
+    /// This is an allocation-free lookup that avoids the need for GetOrDefault patterns.
     /// </summary>
     /// <param name="key">The cache key to look up.</param>
     /// <param name="value">The cached value if found; otherwise, the default value.</param>
@@ -169,13 +276,15 @@ public class Cache<V>
             if (!_items.TryGetValue(key, out var entry))
             {
                 _misses++;
+                IncrementTagMisses(key);
                 value = default;
                 return false;
             }
 
             if (entry.ExpiresAt.HasValue && DateTime.UtcNow > entry.ExpiresAt.Value)
             {
-                RemoveWithEvict(key, entry.Value);
+                IncrementTagMisses(entry.Tags);
+                RemoveWithEvict(key, entry);
                 _misses++;
                 value = default;
                 return false;
@@ -184,6 +293,7 @@ public class Cache<V>
             _order.Remove(key);
             _order.AddFirst(key);
             _hits++;
+            IncrementTagHits(entry.Tags);
             value = entry.Value;
             return true;
         }
@@ -207,10 +317,12 @@ public class Cache<V>
                     _order.Remove(key);
                     _order.AddFirst(key);
                     _hits++;
+                    IncrementTagHits(entry.Tags);
                     return entry.Value;
                 }
 
-                RemoveWithEvict(key, entry.Value);
+                IncrementTagMisses(entry.Tags);
+                RemoveWithEvict(key, entry);
             }
 
             _misses++;
@@ -241,7 +353,7 @@ public class Cache<V>
             if (!_items.TryGetValue(key, out var entry)) return false;
             if (entry.ExpiresAt.HasValue && DateTime.UtcNow > entry.ExpiresAt.Value)
             {
-                RemoveWithEvict(key, entry.Value);
+                RemoveWithEvict(key, entry);
                 return false;
             }
             return true;
@@ -269,11 +381,11 @@ public class Cache<V>
         {
             var entriesToRemove = _items
                 .Where(kv => predicate(kv.Key, kv.Value.Value))
-                .Select(kv => new { kv.Key, kv.Value.Value })
+                .Select(kv => new { kv.Key, Entry = kv.Value })
                 .ToList();
 
-            foreach (var entry in entriesToRemove)
-                RemoveWithEvict(entry.Key, entry.Value);
+            foreach (var item in entriesToRemove)
+                RemoveWithEvict(item.Key, item.Entry);
 
             return entriesToRemove.Count;
         }
@@ -290,11 +402,11 @@ public class Cache<V>
         {
             var entriesToRemove = _items
                 .Where(kv => kv.Value.Tags.Contains(tag))
-                .Select(kv => new { kv.Key, kv.Value.Value })
+                .Select(kv => new { kv.Key, Entry = kv.Value })
                 .ToList();
 
-            foreach (var entry in entriesToRemove)
-                RemoveWithEvict(entry.Key, entry.Value);
+            foreach (var item in entriesToRemove)
+                RemoveWithEvict(item.Key, item.Entry);
 
             return entriesToRemove.Count;
         }
@@ -309,6 +421,7 @@ public class Cache<V>
         {
             _items.Clear();
             _order.Clear();
+            _currentEstimatedSize = 0;
         }
     }
 
@@ -347,10 +460,12 @@ public class Cache<V>
                     _order.Remove(key);
                     _order.AddFirst(key);
                     _hits++;
+                    IncrementTagHits(entry.Tags);
                     return entry.Value;
                 }
 
-                RemoveWithEvict(key, entry.Value);
+                IncrementTagMisses(entry.Tags);
+                RemoveWithEvict(key, entry);
             }
 
             _misses++;
@@ -389,12 +504,14 @@ public class Cache<V>
                 if (!_items.TryGetValue(key, out var entry))
                 {
                     _misses++;
+                    IncrementTagMisses(key);
                     continue;
                 }
 
                 if (entry.ExpiresAt.HasValue && DateTime.UtcNow > entry.ExpiresAt.Value)
                 {
-                    RemoveWithEvict(key, entry.Value);
+                    IncrementTagMisses(entry.Tags);
+                    RemoveWithEvict(key, entry);
                     _misses++;
                     continue;
                 }
@@ -402,6 +519,7 @@ public class Cache<V>
                 _order.Remove(key);
                 _order.AddFirst(key);
                 _hits++;
+                IncrementTagHits(entry.Tags);
                 result[key] = entry.Value;
             }
             return result;
@@ -420,22 +538,96 @@ public class Cache<V>
         }
     }
 
+    /// <summary>
+    /// Gets statistics for entries associated with the specified tag.
+    /// </summary>
+    /// <param name="tag">The tag to get statistics for.</param>
+    /// <returns>A snapshot of hits, misses, and evictions for the tag.</returns>
+    public TagStats GetTagStatistics(string tag)
+    {
+        if (_tagStats.TryGetValue(tag, out var stats))
+        {
+            return new TagStats
+            {
+                Hits = Interlocked.Read(ref stats.Hits),
+                Misses = Interlocked.Read(ref stats.Misses),
+                Evictions = Interlocked.Read(ref stats.Evictions)
+            };
+        }
+
+        return new TagStats { Hits = 0, Misses = 0, Evictions = 0 };
+    }
+
+    /// <summary>
+    /// Releases all resources used by the cache, including the background cleanup timer.
+    /// </summary>
+    public void Dispose()
+    {
+        Dispose(true);
+        GC.SuppressFinalize(this);
+    }
+
+    /// <summary>
+    /// Releases resources used by the cache.
+    /// </summary>
+    /// <param name="disposing">True if called from Dispose; false if called from finalizer.</param>
+    protected virtual void Dispose(bool disposing)
+    {
+        if (_disposed) return;
+
+        if (disposing)
+        {
+            _cleanupTimer?.Dispose();
+        }
+
+        _disposed = true;
+    }
+
+    private void CleanupExpired()
+    {
+        lock (_lock)
+        {
+            if (_disposed) return;
+
+            var now = DateTime.UtcNow;
+            var expired = _items
+                .Where(kv => kv.Value.ExpiresAt.HasValue && now > kv.Value.ExpiresAt.Value)
+                .Select(kv => new { kv.Key, Entry = kv.Value })
+                .ToList();
+
+            foreach (var item in expired)
+            {
+                IncrementTagEvictions(item.Entry.Tags);
+                RemoveEntry(item.Key, item.Entry);
+                _onEvict?.Invoke(item.Key, item.Entry.Value);
+                _evictions++;
+            }
+        }
+    }
+
     private bool Remove(string key)
     {
-        if (_items.Remove(key))
+        if (_items.TryGetValue(key, out var entry))
         {
+            _currentEstimatedSize -= entry.EstimatedSize;
+            _items.Remove(key);
             _order.Remove(key);
             return true;
         }
         return false;
     }
 
-    private void RemoveWithEvict(string key, V value)
+    private void RemoveEntry(string key, CacheEntry<V> entry)
     {
-        if (Remove(key))
-        {
-            _onEvict?.Invoke(key, value);
-        }
+        _currentEstimatedSize -= entry.EstimatedSize;
+        _items.Remove(key);
+        _order.Remove(key);
+    }
+
+    private void RemoveWithEvict(string key, CacheEntry<V> entry)
+    {
+        RemoveEntry(key, entry);
+        _onEvict?.Invoke(key, entry.Value);
     }
 
     private void Evict()
@@ -444,7 +636,8 @@ public class Cache<V>
         var expired = _items.FirstOrDefault(kv => kv.Value.ExpiresAt.HasValue && now > kv.Value.ExpiresAt.Value);
         if (expired.Key != null)
         {
-            RemoveWithEvict(expired.Key, expired.Value.Value);
+            IncrementTagEvictions(expired.Value.Tags);
+            RemoveWithEvict(expired.Key, expired.Value);
             _evictions++;
             return;
         }
@@ -454,9 +647,68 @@ public class Cache<V>
             var lastKey = _order.Last.Value;
             if (_items.TryGetValue(lastKey, out var entry))
             {
-                RemoveWithEvict(lastKey, entry.Value);
+                IncrementTagEvictions(entry.Tags);
+                RemoveWithEvict(lastKey, entry);
                 _evictions++;
             }
+        }
+    }
+
+    private void EvictForMemoryBudget()
+    {
+        if (!_maxMemoryBytes.HasValue) return;
+
+        while (_currentEstimatedSize > _maxMemoryBytes.Value && _order.Last != null)
+        {
+            var lastKey = _order.Last.Value;
+            if (_items.TryGetValue(lastKey, out var entry))
+            {
+                IncrementTagEvictions(entry.Tags);
+                RemoveWithEvict(lastKey, entry);
+                _evictions++;
+            }
+            else
+            {
+                _order.RemoveLast();
+            }
+        }
+    }
+
+    private MutableTagStats GetOrCreateTagStats(string tag)
+    {
+        return _tagStats.GetOrAdd(tag, _ => new MutableTagStats());
+    }
+
+    private void IncrementTagHits(HashSet<string> tags)
+    {
+        foreach (var tag in tags)
+        {
+            var stats = GetOrCreateTagStats(tag);
+            Interlocked.Increment(ref stats.Hits);
+        }
+    }
+
+    private void IncrementTagMisses(HashSet<string> tags)
+    {
+        foreach (var tag in tags)
+        {
+            var stats = GetOrCreateTagStats(tag);
+            Interlocked.Increment(ref stats.Misses);
+        }
+    }
+
+    private void IncrementTagMisses(string key)
+    {
+        // For misses where the key doesn't exist, we can't determine tags
+        // Tag misses are only tracked when the entry exists but is expired
+    }
+
+    private void IncrementTagEvictions(HashSet<string> tags)
+    {
+        foreach (var tag in tags)
+        {
+            var stats = GetOrCreateTagStats(tag);
+            Interlocked.Increment(ref stats.Evictions);
         }
     }
 }

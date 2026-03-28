@@ -2,7 +2,11 @@
 
 [![CI](https://github.com/philiprehberger/dotnet-cache-kit/actions/workflows/ci.yml/badge.svg)](https://github.com/philiprehberger/dotnet-cache-kit/actions/workflows/ci.yml)
 [![NuGet](https://img.shields.io/nuget/v/Philiprehberger.CacheKit.svg)](https://www.nuget.org/packages/Philiprehberger.CacheKit)
+[![GitHub release](https://img.shields.io/github/v/release/philiprehberger/dotnet-cache-kit)](https://github.com/philiprehberger/dotnet-cache-kit/releases)
+[![Last updated](https://img.shields.io/github/last-commit/philiprehberger/dotnet-cache-kit)](https://github.com/philiprehberger/dotnet-cache-kit/commits/main)
 [![License](https://img.shields.io/github/license/philiprehberger/dotnet-cache-kit)](LICENSE)
+[![Bug Reports](https://img.shields.io/github/issues/philiprehberger/dotnet-cache-kit/bug)](https://github.com/philiprehberger/dotnet-cache-kit/issues?q=is%3Aissue+is%3Aopen+label%3Abug)
+[![Feature Requests](https://img.shields.io/github/issues/philiprehberger/dotnet-cache-kit/enhancement)](https://github.com/philiprehberger/dotnet-cache-kit/issues?q=is%3Aissue+is%3Aopen+label%3Aenhancement)
 [![Sponsor](https://img.shields.io/badge/sponsor-GitHub%20Sponsors-ec6cb9)](https://github.com/sponsors/philiprehberger)
 
 Thread-safe in-memory LRU cache for .NET — TTL expiration, tag-based invalidation, and configurable max size.
@@ -36,29 +40,58 @@ cache.Set("session", "abc123", ttl: TimeSpan.FromMinutes(30));
 cache.Set("post:1", "Hello", tags: new[] { "posts", "user:1" });
 cache.Set("post:2", "World", tags: new[] { "posts", "user:1" });
 cache.InvalidateByTag("user:1");  // removes both
+```
 
-// Check existence
-bool exists = cache.Has("user:1");
+### Background Cleanup
 
-// Delete
-cache.Delete("user:1");
+Enable periodic removal of expired entries to proactively free memory instead of waiting for access-triggered eviction:
 
-// Get all valid keys
-var keys = cache.Keys();
+```csharp
+using var cache = new Cache<string>(new CacheOptions
+{
+    MaxSize = 10000,
+    DefaultTtl = TimeSpan.FromMinutes(5),
+    BackgroundCleanupInterval = TimeSpan.FromMinutes(1)
+});
 
-// Clear everything
-cache.Clear();
+cache.Set("session:1", "data");
+// Expired entries are automatically removed every minute
+// Dispose the cache to stop the background timer
+```
 
-// Get or create (atomic)
-var user = cache.GetOrSet("user:1", () => LoadUserFromDb("1"), ttl: TimeSpan.FromMinutes(10));
+### Size-Based Eviction
 
-// Delete entries matching a predicate
-int removed = cache.DeleteWhere((key, value) => key.StartsWith("session:"));
+Set a memory budget and provide size hints to evict LRU entries when the budget is exceeded:
 
-// Cache statistics
+```csharp
+using var cache = new Cache<byte[]>(new CacheOptions
+{
+    MaxSize = 10000,
+    MaxMemoryBytes = 50 * 1024 * 1024  // 50 MB
+});
+
+cache.Set("image:1", imageBytes, estimatedSize: imageBytes.Length);
+cache.Set("image:2", otherBytes, estimatedSize: otherBytes.Length);
+
+// When total estimated size exceeds 50 MB, LRU entries are evicted
 var stats = cache.Stats;
-Console.WriteLine($"Hits: {stats.Hits}, Misses: {stats.Misses}");
-Console.WriteLine($"Evictions: {stats.Evictions}, Hit Rate: {stats.HitRate:P1}");
+Console.WriteLine($"Current memory usage: {stats.CurrentEstimatedSize} bytes");
+```
+
+### Per-Tag Statistics
+
+Track hits, misses, and evictions for entries grouped by tag:
+
+```csharp
+var cache = new Cache<string>(maxSize: 1000);
+
+cache.Set("user:1", "Alice", tags: new[] { "users" });
+cache.Set("user:2", "Bob", tags: new[] { "users" });
+cache.Get("user:1");
+cache.Get("user:2");
+
+var tagStats = cache.GetTagStatistics("users");
+Console.WriteLine($"Tag 'users' — Hits: {tagStats.Hits}, Misses: {tagStats.Misses}, Evictions: {tagStats.Evictions}");
 ```
 
 ### Async Usage
@@ -97,11 +130,13 @@ cache.OnEvict((key, value) =>
 
 ## API
 
+### `Cache<V>`
+
 | Method | Description |
 |--------|-------------|
-| `Set(key, value, ttl?, tags?)` | Store a value with optional TTL and tags |
+| `Set(key, value, ttl?, tags?, estimatedSize?)` | Store a value with optional TTL, tags, and size hint |
 | `Get(key)` | Get value or default if missing/expired |
-| `TryGet(key, out value)` | Try to get value, returns bool |
+| `TryGet(key, out value)` | Try to get value, returns bool without throwing |
 | `Has(key)` | Check if key exists and is not expired |
 | `Delete(key)` | Remove a key |
 | `InvalidateByTag(tag)` | Remove all entries with a given tag |
@@ -112,14 +147,50 @@ cache.OnEvict((key, value) =>
 | `GetMany(keys)` | Get multiple values; missing keys omitted from result |
 | `OnEvict(callback)` | Register callback for eviction notifications |
 | `DeleteWhere(predicate)` | Remove all entries matching predicate, returns count |
-| `Stats` | Get cache statistics (hits, misses, evictions, hit rate) |
+| `GetTagStatistics(tag)` | Get per-tag hits, misses, and eviction counts |
+| `Stats` | Get cache statistics (hits, misses, evictions, current estimated size, hit rate) |
 | `Size` | Current number of entries |
+| `Dispose()` | Stop background cleanup timer and release resources |
+
+### `CacheOptions`
+
+| Property | Type | Default | Description |
+|----------|------|---------|-------------|
+| `MaxSize` | `int` | `1000` | Maximum number of entries before LRU eviction |
+| `DefaultTtl` | `TimeSpan?` | `null` | Default time-to-live for entries without explicit TTL |
+| `BackgroundCleanupInterval` | `TimeSpan?` | `null` | Interval for background expired-entry cleanup |
+| `MaxMemoryBytes` | `long?` | `null` | Memory budget in bytes for size-based eviction |
+
+### `CacheStats`
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `Hits` | `long` | Total cache hits |
+| `Misses` | `long` | Total cache misses |
+| `Evictions` | `long` | Total entries evicted |
+| `CurrentEstimatedSize` | `long` | Total estimated size of all entries in bytes |
+| `HitRate` | `double` | Hit rate between 0.0 and 1.0 |
+
+### `TagStats`
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `Hits` | `long` | Hits for entries with this tag |
+| `Misses` | `long` | Misses for entries with this tag |
+| `Evictions` | `long` | Evictions for entries with this tag |
 
 ## Development
 
 ```bash
 dotnet build src/Philiprehberger.CacheKit.csproj --configuration Release
 ```
+
+## Support
+
+If you find this package useful, consider giving it a star on GitHub — it helps motivate continued maintenance and development.
+
+[![LinkedIn](https://img.shields.io/badge/Philip%20Rehberger-LinkedIn-0A66C2?logo=linkedin)](https://www.linkedin.com/in/philiprehberger)
+[![More packages](https://img.shields.io/badge/more-open%20source%20packages-blue)](https://philiprehberger.com/open-source-packages)
 
 ## License
 

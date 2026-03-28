@@ -17,6 +17,7 @@ jobs:
           dotnet-version: '8.0.x'
       - run: dotnet restore src/Philiprehberger.CacheKit.csproj
       - run: dotnet build src/Philiprehberger.CacheKit.csproj --configuration Release --no-restore
+      - run: dotnet test tests/Philiprehberger.CacheKit.Tests/Philiprehberger.CacheKit.Tests.csproj --configuration Release --no-restore
 
   publish:
     needs: build

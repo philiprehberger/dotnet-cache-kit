@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.4.0 (2026-03-27)
+
+- Add background expiration cleanup with configurable interval
+- Add size-based eviction with estimated memory budget
+- Add per-tag statistics tracking
+- Add TryGet method for allocation-free lookups
+
 ## 0.3.4 (2026-03-26)
 
 - Add Sponsor badge to README
