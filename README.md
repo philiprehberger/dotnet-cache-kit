@@ -2,12 +2,7 @@
 
 [![CI](https://github.com/philiprehberger/dotnet-cache-kit/actions/workflows/ci.yml/badge.svg)](https://github.com/philiprehberger/dotnet-cache-kit/actions/workflows/ci.yml)
 [![NuGet](https://img.shields.io/nuget/v/Philiprehberger.CacheKit.svg)](https://www.nuget.org/packages/Philiprehberger.CacheKit)
-[![GitHub release](https://img.shields.io/github/v/release/philiprehberger/dotnet-cache-kit)](https://github.com/philiprehberger/dotnet-cache-kit/releases)
 [![Last updated](https://img.shields.io/github/last-commit/philiprehberger/dotnet-cache-kit)](https://github.com/philiprehberger/dotnet-cache-kit/commits/main)
-[![License](https://img.shields.io/github/license/philiprehberger/dotnet-cache-kit)](LICENSE)
-[![Bug Reports](https://img.shields.io/github/issues/philiprehberger/dotnet-cache-kit/bug)](https://github.com/philiprehberger/dotnet-cache-kit/issues?q=is%3Aissue+is%3Aopen+label%3Abug)
-[![Feature Requests](https://img.shields.io/github/issues/philiprehberger/dotnet-cache-kit/enhancement)](https://github.com/philiprehberger/dotnet-cache-kit/issues?q=is%3Aissue+is%3Aopen+label%3Aenhancement)
-[![Sponsor](https://img.shields.io/badge/sponsor-GitHub%20Sponsors-ec6cb9)](https://github.com/sponsors/philiprehberger)
 
 Thread-safe in-memory LRU cache for .NET — TTL expiration, tag-based invalidation, and configurable max size.
 
@@ -187,10 +182,21 @@ dotnet build src/Philiprehberger.CacheKit.csproj --configuration Release
 
 ## Support
 
-If you find this package useful, consider giving it a star on GitHub — it helps motivate continued maintenance and development.
+If you find this project useful:
 
-[![LinkedIn](https://img.shields.io/badge/Philip%20Rehberger-LinkedIn-0A66C2?logo=linkedin)](https://www.linkedin.com/in/philiprehberger)
-[![More packages](https://img.shields.io/badge/more-open%20source%20packages-blue)](https://philiprehberger.com/open-source-packages)
+⭐ [Star the repo](https://github.com/philiprehberger/dotnet-cache-kit)
+
+🐛 [Report issues](https://github.com/philiprehberger/dotnet-cache-kit/issues?q=is%3Aissue+is%3Aopen+label%3Abug)
+
+💡 [Suggest features](https://github.com/philiprehberger/dotnet-cache-kit/issues?q=is%3Aissue+is%3Aopen+label%3Aenhancement)
+
+❤️ [Sponsor development](https://github.com/sponsors/philiprehberger)
+
+🌐 [All Open Source Projects](https://philiprehberger.com/open-source-packages)
+
+💻 [GitHub Profile](https://github.com/philiprehberger)
+
+🔗 [LinkedIn Profile](https://www.linkedin.com/in/philiprehberger)
 
 ## License
 
