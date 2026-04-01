@@ -68,6 +68,22 @@ internal class MutableTagStats
 }
 
 /// <summary>
+/// Specifies the eviction policy used by the cache when capacity is exceeded.
+/// </summary>
+public enum EvictionPolicy
+{
+    /// <summary>
+    /// Least Recently Used — evicts the entry that has not been accessed for the longest time.
+    /// </summary>
+    Lru,
+
+    /// <summary>
+    /// Least Frequently Used — evicts the entry with the fewest access counts.
+    /// </summary>
+    Lfu
+}
+
+/// <summary>
 /// Configuration options for the cache.
 /// </summary>
 public class CacheOptions
@@ -92,10 +108,16 @@ public class CacheOptions
 
     /// <summary>
     /// Gets or sets an optional maximum memory budget in bytes. When the total estimated size
-    /// of all cache entries exceeds this value, LRU entries are evicted until the budget is met.
-    /// Requires callers to provide size hints via the <c>estimatedSize</c> parameter on <c>Set</c>.
+    /// of all cache entries exceeds this value, entries are evicted according to the eviction
+    /// policy until the budget is met. Requires callers to provide size hints via the
+    /// <c>estimatedSize</c> parameter on <c>Set</c>.
     /// </summary>
     public long? MaxMemoryBytes { get; set; }
+
+    /// <summary>
+    /// Gets or sets the eviction policy. Defaults to <see cref="EvictionPolicy.Lru"/>.
+    /// </summary>
+    public EvictionPolicy EvictionPolicy { get; set; } = EvictionPolicy.Lru;
 }
 
 internal class CacheEntry<V>
@@ -104,11 +126,13 @@ internal class CacheEntry<V>
     public DateTime? ExpiresAt { get; set; }
     public HashSet<string> Tags { get; set; } = new();
     public long EstimatedSize { get; set; }
+    public long AccessCount { get; set; }
 }
 
 /// <summary>
-/// A thread-safe, in-memory LRU cache with support for TTL expiration, tag-based invalidation,
-/// size-based eviction, background cleanup, per-tag statistics, and eviction callbacks.
+/// A thread-safe, in-memory cache with support for TTL expiration, tag-based invalidation,
+/// size-based eviction, background cleanup, per-tag statistics, eviction callbacks,
+/// cache warming, LFU eviction policy, and key expiration events.
 /// </summary>
 /// <typeparam name="V">The type of values stored in the cache.</typeparam>
 public class Cache<V> : IDisposable
@@ -118,6 +142,7 @@ public class Cache<V> : IDisposable
     private readonly int _maxSize;
     private readonly TimeSpan? _defaultTtl;
     private readonly long? _maxMemoryBytes;
+    private readonly EvictionPolicy _evictionPolicy;
     private readonly object _lock = new();
     private readonly ConcurrentDictionary<string, MutableTagStats> _tagStats = new();
     private readonly Timer? _cleanupTimer;
@@ -127,6 +152,7 @@ public class Cache<V> : IDisposable
     private long _evictions;
     private long _currentEstimatedSize;
     private Action<string, V>? _onEvict;
+    private Action<string, V>? _onExpired;
     private bool _disposed;
 
     /// <summary>
@@ -139,6 +165,7 @@ public class Cache<V> : IDisposable
         _maxSize = maxSize;
         _defaultTtl = defaultTtl;
         _maxMemoryBytes = null;
+        _evictionPolicy = EvictionPolicy.Lru;
         _items = new Dictionary<string, CacheEntry<V>>(maxSize);
     }
 
@@ -151,6 +178,7 @@ public class Cache<V> : IDisposable
         _maxSize = options.MaxSize;
         _defaultTtl = options.DefaultTtl;
         _maxMemoryBytes = options.MaxMemoryBytes;
+        _evictionPolicy = options.EvictionPolicy;
         _items = new Dictionary<string, CacheEntry<V>>(options.MaxSize);
 
         if (options.BackgroundCleanupInterval.HasValue)
@@ -249,13 +277,17 @@ public class Cache<V> : IDisposable
             if (entry.ExpiresAt.HasValue && DateTime.UtcNow > entry.ExpiresAt.Value)
             {
                 IncrementTagMisses(entry.Tags);
-                RemoveWithEvict(key, entry);
+                var expiredValue = entry.Value;
+                RemoveEntry(key, entry);
+                _onExpired?.Invoke(key, expiredValue);
+                _onEvict?.Invoke(key, expiredValue);
                 _misses++;
                 return default;
             }
 
             _order.Remove(key);
             _order.AddFirst(key);
+            entry.AccessCount++;
             _hits++;
             IncrementTagHits(entry.Tags);
             return entry.Value;
@@ -284,7 +316,10 @@ public class Cache<V> : IDisposable
             if (entry.ExpiresAt.HasValue && DateTime.UtcNow > entry.ExpiresAt.Value)
             {
                 IncrementTagMisses(entry.Tags);
-                RemoveWithEvict(key, entry);
+                var expiredValue = entry.Value;
+                RemoveEntry(key, entry);
+                _onExpired?.Invoke(key, expiredValue);
+                _onEvict?.Invoke(key, expiredValue);
                 _misses++;
                 value = default;
                 return false;
@@ -292,6 +327,7 @@ public class Cache<V> : IDisposable
 
             _order.Remove(key);
             _order.AddFirst(key);
+            entry.AccessCount++;
             _hits++;
             IncrementTagHits(entry.Tags);
             value = entry.Value;
@@ -316,13 +352,17 @@ public class Cache<V> : IDisposable
                 {
                     _order.Remove(key);
                     _order.AddFirst(key);
+                    entry.AccessCount++;
                     _hits++;
                     IncrementTagHits(entry.Tags);
                     return entry.Value;
                 }
 
                 IncrementTagMisses(entry.Tags);
-                RemoveWithEvict(key, entry);
+                var expiredValue = entry.Value;
+                RemoveEntry(key, entry);
+                _onExpired?.Invoke(key, expiredValue);
+                _onEvict?.Invoke(key, expiredValue);
             }
 
             _misses++;
@@ -353,7 +393,10 @@ public class Cache<V> : IDisposable
             if (!_items.TryGetValue(key, out var entry)) return false;
             if (entry.ExpiresAt.HasValue && DateTime.UtcNow > entry.ExpiresAt.Value)
             {
-                RemoveWithEvict(key, entry);
+                var expiredValue = entry.Value;
+                RemoveEntry(key, entry);
+                _onExpired?.Invoke(key, expiredValue);
+                _onEvict?.Invoke(key, expiredValue);
                 return false;
             }
             return true;
@@ -459,13 +502,17 @@ public class Cache<V> : IDisposable
                 {
                     _order.Remove(key);
                     _order.AddFirst(key);
+                    entry.AccessCount++;
                     _hits++;
                     IncrementTagHits(entry.Tags);
                     return entry.Value;
                 }
 
                 IncrementTagMisses(entry.Tags);
-                RemoveWithEvict(key, entry);
+                var expiredValue = entry.Value;
+                RemoveEntry(key, entry);
+                _onExpired?.Invoke(key, expiredValue);
+                _onEvict?.Invoke(key, expiredValue);
             }
 
             _misses++;
@@ -490,6 +537,47 @@ public class Cache<V> : IDisposable
     }
 
     /// <summary>
+    /// Pre-loads cache entries from a data source. Useful for warming the cache on application startup.
+    /// Existing entries with matching keys are overwritten.
+    /// </summary>
+    /// <typeparam name="T">The value type (must match the cache value type).</typeparam>
+    /// <param name="loader">An async function that returns key-value pairs to load into the cache.</param>
+    /// <param name="ttl">Optional TTL applied to all warmed entries.</param>
+    /// <param name="tags">Optional tags applied to all warmed entries.</param>
+    /// <returns>The number of entries loaded into the cache.</returns>
+    public async Task<int> WarmAsync<T>(Func<Task<IEnumerable<KeyValuePair<string, T>>>> loader, TimeSpan? ttl = null, IEnumerable<string>? tags = null) where T : V
+    {
+        var entries = await loader();
+        var count = 0;
+
+        lock (_lock)
+        {
+            foreach (var kvp in entries)
+            {
+                var effectiveTtl = ttl ?? _defaultTtl;
+                var expiresAt = effectiveTtl.HasValue ? DateTime.UtcNow + effectiveTtl.Value : (DateTime?)null;
+                var tagSet = tags != null ? new HashSet<string>(tags) : new HashSet<string>();
+
+                if (_items.TryGetValue(kvp.Key, out var existing))
+                {
+                    _currentEstimatedSize -= existing.EstimatedSize;
+                    _order.Remove(kvp.Key);
+                }
+                else if (_items.Count >= _maxSize)
+                {
+                    Evict();
+                }
+
+                _items[kvp.Key] = new CacheEntry<V> { Value = kvp.Value, ExpiresAt = expiresAt, Tags = tagSet };
+                _order.AddFirst(kvp.Key);
+                count++;
+            }
+        }
+
+        return count;
+    }
+
+    /// <summary>
     /// Gets multiple values by keys. Missing or expired keys are omitted from results.
     /// </summary>
     /// <param name="keys">The cache keys to look up.</param>
@@ -511,13 +599,17 @@ public class Cache<V> : IDisposable
                 if (entry.ExpiresAt.HasValue && DateTime.UtcNow > entry.ExpiresAt.Value)
                 {
                     IncrementTagMisses(entry.Tags);
-                    RemoveWithEvict(key, entry);
+                    var expiredValue = entry.Value;
+                    RemoveEntry(key, entry);
+                    _onExpired?.Invoke(key, expiredValue);
+                    _onEvict?.Invoke(key, expiredValue);
                     _misses++;
                     continue;
                 }
 
                 _order.Remove(key);
                 _order.AddFirst(key);
+                entry.AccessCount++;
                 _hits++;
                 IncrementTagHits(entry.Tags);
                 result[key] = entry.Value;
@@ -527,7 +619,8 @@ public class Cache<V> : IDisposable
     }
 
     /// <summary>
-    /// Registers a callback that fires when entries are evicted due to LRU eviction, TTL expiry, tag invalidation, or predicate deletion.
+    /// Registers a callback that fires when entries are evicted due to capacity eviction, TTL expiry,
+    /// tag invalidation, or predicate deletion.
     /// </summary>
     /// <param name="callback">The callback receiving the evicted key and value.</param>
     public void OnEvict(Action<string, V> callback)
@@ -535,6 +628,19 @@ public class Cache<V> : IDisposable
         lock (_lock)
         {
             _onEvict = callback;
+        }
+    }
+
+    /// <summary>
+    /// Registers a callback that fires when a key expires due to TTL. This is distinct from
+    /// capacity-based eviction — it only fires when a key is removed because its TTL has elapsed.
+    /// </summary>
+    /// <param name="callback">The callback receiving the expired key and value.</param>
+    public void OnExpired(Action<string, V> callback)
+    {
+        lock (_lock)
+        {
+            _onExpired = callback;
         }
     }
 
@@ -599,6 +705,7 @@ public class Cache<V> : IDisposable
             {
                 IncrementTagEvictions(item.Entry.Tags);
                 RemoveEntry(item.Key, item.Entry);
+                _onExpired?.Invoke(item.Key, item.Entry.Value);
                 _onEvict?.Invoke(item.Key, item.Entry.Value);
                 _evictions++;
             }
@@ -637,11 +744,26 @@ public class Cache<V> : IDisposable
         if (expired.Key != null)
         {
             IncrementTagEvictions(expired.Value.Tags);
-            RemoveWithEvict(expired.Key, expired.Value);
+            var expiredValue = expired.Value.Value;
+            RemoveEntry(expired.Key, expired.Value);
+            _onExpired?.Invoke(expired.Key, expiredValue);
+            _onEvict?.Invoke(expired.Key, expiredValue);
             _evictions++;
             return;
         }
 
+        if (_evictionPolicy == EvictionPolicy.Lfu)
+        {
+            EvictLfu();
+        }
+        else
+        {
+            EvictLru();
+        }
+    }
+
+    private void EvictLru()
+    {
         if (_order.Last != null)
         {
             var lastKey = _order.Last.Value;
@@ -654,22 +776,52 @@ public class Cache<V> : IDisposable
         }
     }
 
+    private void EvictLfu()
+    {
+        string? lfuKey = null;
+        long minCount = long.MaxValue;
+
+        foreach (var kvp in _items)
+        {
+            if (kvp.Value.AccessCount < minCount)
+            {
+                minCount = kvp.Value.AccessCount;
+                lfuKey = kvp.Key;
+            }
+        }
+
+        if (lfuKey != null && _items.TryGetValue(lfuKey, out var entry))
+        {
+            IncrementTagEvictions(entry.Tags);
+            RemoveWithEvict(lfuKey, entry);
+            _evictions++;
+        }
+    }
+
     private void EvictForMemoryBudget()
     {
         if (!_maxMemoryBytes.HasValue) return;
 
         while (_currentEstimatedSize > _maxMemoryBytes.Value && _order.Last != null)
         {
-            var lastKey = _order.Last.Value;
-            if (_items.TryGetValue(lastKey, out var entry))
+            if (_evictionPolicy == EvictionPolicy.Lfu)
             {
-                IncrementTagEvictions(entry.Tags);
-                RemoveWithEvict(lastKey, entry);
-                _evictions++;
+                EvictLfu();
+                if (_items.Count == 0) break;
             }
             else
             {
-                _order.RemoveLast();
+                var lastKey = _order.Last.Value;
+                if (_items.TryGetValue(lastKey, out var entry))
+                {
+                    IncrementTagEvictions(entry.Tags);
+                    RemoveWithEvict(lastKey, entry);
+                    _evictions++;
+                }
+                else
+                {
+                    _order.RemoveLast();
+                }
             }
         }
     }

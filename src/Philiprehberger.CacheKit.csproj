@@ -7,14 +7,14 @@
     <LangVersion>latest</LangVersion>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <PackageId>Philiprehberger.CacheKit</PackageId>
-    <Version>0.4.1</Version>
+    <Version>0.5.0</Version>
     <Authors>Philip Rehberger</Authors>
-    <Description>Thread-safe in-memory LRU cache for .NET — TTL expiration, tag-based invalidation, and configurable max size.</Description>
+    <Description>Thread-safe in-memory cache for .NET — LRU/LFU eviction, TTL expiration, tag-based invalidation, cache warming, and configurable max size.</Description>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <RepositoryUrl>https://github.com/philiprehberger/dotnet-cache-kit</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
-    <PackageTags>cache;lru;ttl;memory;caching</PackageTags>
+    <PackageTags>cache;lru;lfu;ttl;memory;caching;eviction</PackageTags>
     <PackageReadmeFile>README.md</PackageReadmeFile>
   </PropertyGroup>
 

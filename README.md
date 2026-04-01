@@ -4,7 +4,7 @@
 [![NuGet](https://img.shields.io/nuget/v/Philiprehberger.CacheKit.svg)](https://www.nuget.org/packages/Philiprehberger.CacheKit)
 [![Last updated](https://img.shields.io/github/last-commit/philiprehberger/dotnet-cache-kit)](https://github.com/philiprehberger/dotnet-cache-kit/commits/main)
 
-Thread-safe in-memory LRU cache for .NET — TTL expiration, tag-based invalidation, and configurable max size.
+Thread-safe in-memory cache for .NET — LRU/LFU eviction, TTL expiration, tag-based invalidation, cache warming, and configurable max size.
 
 ## Installation
 
@@ -112,6 +112,61 @@ var found = cache.GetMany(keys);
 // found is Dictionary<string, string> with only the keys that exist
 ```
 
+### Cache Warming
+
+Pre-load entries from a data source on startup using `WarmAsync`:
+
+```csharp
+var cache = new Cache<string>(maxSize: 10000);
+
+var loaded = await cache.WarmAsync<string>(async () =>
+{
+    var users = await db.GetAllUsersAsync();
+    return users.Select(u => new KeyValuePair<string, string>($"user:{u.Id}", u.Name));
+}, ttl: TimeSpan.FromMinutes(30), tags: new[] { "users" });
+
+Console.WriteLine($"Warmed {loaded} entries");
+```
+
+### LFU Eviction Policy
+
+Switch from the default LRU to Least Frequently Used eviction, which tracks access counts per key and evicts the entry accessed the fewest times:
+
+```csharp
+var cache = new Cache<string>(new CacheOptions
+{
+    MaxSize = 1000,
+    EvictionPolicy = EvictionPolicy.Lfu
+});
+
+cache.Set("hot", "frequently-accessed");
+cache.Set("cold", "rarely-accessed");
+
+// Access "hot" many times
+for (var i = 0; i < 100; i++)
+    cache.Get("hot");
+
+// When capacity is reached, "cold" is evicted first (fewer accesses)
+```
+
+### Key Expiration Events
+
+Register a callback that fires only when a key expires due to TTL (not capacity eviction):
+
+```csharp
+cache.OnExpired((key, value) =>
+{
+    Console.WriteLine($"TTL expired: {key}");
+    // Refresh from database, log metric, etc.
+});
+
+// OnEvict still fires for all removals (capacity, TTL, tag, predicate)
+cache.OnEvict((key, value) =>
+{
+    Console.WriteLine($"Removed: {key}");
+});
+```
+
 ### Eviction Callbacks
 
 Register a callback to be notified when entries are evicted:
@@ -141,6 +196,8 @@ cache.OnEvict((key, value) =>
 | `GetOrSetAsync(key, factory, ttl?, tags?)` | Async version of GetOrSet with optional tags |
 | `GetMany(keys)` | Get multiple values; missing keys omitted from result |
 | `OnEvict(callback)` | Register callback for eviction notifications |
+| `OnExpired(callback)` | Register callback for TTL expiration events |
+| `WarmAsync<T>(loader, ttl?, tags?)` | Pre-load entries from an async data source |
 | `DeleteWhere(predicate)` | Remove all entries matching predicate, returns count |
 | `GetTagStatistics(tag)` | Get per-tag hits, misses, and eviction counts |
 | `Stats` | Get cache statistics (hits, misses, evictions, current estimated size, hit rate) |
@@ -155,6 +212,7 @@ cache.OnEvict((key, value) =>
 | `DefaultTtl` | `TimeSpan?` | `null` | Default time-to-live for entries without explicit TTL |
 | `BackgroundCleanupInterval` | `TimeSpan?` | `null` | Interval for background expired-entry cleanup |
 | `MaxMemoryBytes` | `long?` | `null` | Memory budget in bytes for size-based eviction |
+| `EvictionPolicy` | `EvictionPolicy` | `Lru` | Eviction strategy: `Lru` or `Lfu` |
 
 ### `CacheStats`
 

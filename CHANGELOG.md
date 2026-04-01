@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.5.0 (2026-03-31)
+
+- Add `WarmAsync<T>` for pre-loading cache entries from a data source on startup
+- Add `EvictionPolicy` enum with LRU and LFU eviction strategies
+- Add `OnExpired` callback for TTL-based expiration events (distinct from capacity eviction)
+- Track per-key access counts for LFU eviction policy
+
 ## 0.4.1 (2026-03-31)
 
 - Standardize README to 3-badge format with emoji Support section
